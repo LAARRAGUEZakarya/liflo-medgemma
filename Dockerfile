@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y git python3-pip && \
 
 RUN pip install --upgrade pip && \
     pip install torch==2.5.1+cu118 --index-url https://download.pytorch.org/whl/cu118 && \
-    pip install transformers accelerate Pillow runpod
+    pip install "transformers>=4.51.0" accelerate Pillow runpod sentencepiece protobuf
 
 COPY handler.py /handler.py
 
