@@ -1,22 +1,24 @@
-# v2 - load model at startup
 import runpod, os, base64, traceback
 from io import BytesIO
 import torch
 from transformers import AutoProcessor, Gemma3ForConditionalGeneration
 from PIL import Image
 
-MODEL_ID = "google/medgemma-4b-it"
+MODEL_ID  = "google/medgemma-4b-it"
+CACHE_DIR = "/runpod-volume/models"
 
-print("Loading MedGemma model at startup...")
+print("Loading MedGemma model...")
 processor = AutoProcessor.from_pretrained(
     MODEL_ID,
     token=os.environ.get("HF_TOKEN"),
+    cache_dir=CACHE_DIR,
 )
 model = Gemma3ForConditionalGeneration.from_pretrained(
     MODEL_ID,
     torch_dtype=torch.bfloat16,
     device_map="auto",
     token=os.environ.get("HF_TOKEN"),
+    cache_dir=CACHE_DIR,
 )
 model.eval()
 print("MedGemma ready.")
