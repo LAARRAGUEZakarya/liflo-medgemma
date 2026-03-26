@@ -1,48 +1,34 @@
 import runpod, os, base64, traceback
 from io import BytesIO
+import torch
+from transformers import AutoProcessor, Gemma3ForConditionalGeneration
+from PIL import Image
 
 MODEL_ID = "google/medgemma-4b-it"
-model = None
-processor = None
 
-
-def load_model():
-    global model, processor
-    if model is not None:
-        return
-
-    import torch
-    from transformers import AutoProcessor, Gemma3ForConditionalGeneration
-
-    print("Loading MedGemma...")
-    processor = AutoProcessor.from_pretrained(
-        MODEL_ID,
-        token=os.environ.get("HF_TOKEN"),
-    )
-    model = Gemma3ForConditionalGeneration.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.bfloat16,
-        device_map="auto",
-        token=os.environ.get("HF_TOKEN"),
-    )
-    model.eval()
-    print("MedGemma ready.")
+print("Loading MedGemma model at startup...")
+processor = AutoProcessor.from_pretrained(
+    MODEL_ID,
+    token=os.environ.get("HF_TOKEN"),
+)
+model = Gemma3ForConditionalGeneration.from_pretrained(
+    MODEL_ID,
+    torch_dtype=torch.bfloat16,
+    device_map="auto",
+    token=os.environ.get("HF_TOKEN"),
+)
+model.eval()
+print("MedGemma ready.")
 
 
 def handler(job):
     job_input = job["input"]
     try:
-        load_model()
-
-        import torch
-        from PIL import Image
-
-        prompt    = str(job_input.get("prompt", "Analyse ce document médical."))
-        mode      = str(job_input.get("mode", "chat"))
-        img_b64   = job_input.get("image_base64", "")
+        prompt  = str(job_input.get("prompt", "Analyse ce document médical."))
+        mode    = str(job_input.get("mode", "chat"))
+        img_b64 = job_input.get("image_base64", "")
 
         if img_b64:
-            # Image + text
             image = Image.open(BytesIO(base64.b64decode(img_b64))).convert("RGB")
             messages = [{"role": "user", "content": [
                 {"type": "image"},
@@ -55,7 +41,6 @@ def handler(job):
                 text=text, images=[image], return_tensors="pt"
             ).to(model.device)
         else:
-            # Text only
             messages = [{"role": "user", "content": prompt}]
             text = processor.tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
