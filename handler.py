@@ -1,3 +1,4 @@
+# v2 - load model at startup
 import runpod, os, base64, traceback
 from io import BytesIO
 import torch
