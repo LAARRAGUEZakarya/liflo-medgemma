@@ -6,6 +6,6 @@ RUN apt-get update && apt-get install -y python3.10 python3-pip python3.10-dev g
     rm -rf /var/lib/apt/lists/*
 RUN pip install --upgrade pip && \
     pip install torch==2.2.0 torchvision --index-url https://download.pytorch.org/whl/cu121 && \
-    pip install transformers accelerate Pillow runpod sentencepiece protobuf huggingface_hub
+    pip install "transformers==4.50.3" accelerate Pillow runpod sentencepiece protobuf huggingface_hub
 COPY handler.py /handler.py
 CMD ["python", "-u", "/handler.py"]
