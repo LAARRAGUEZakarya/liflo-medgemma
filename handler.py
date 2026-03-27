@@ -1,6 +1,5 @@
 import runpod
 import os
-import json
 import base64
 import traceback
 from io import BytesIO
@@ -46,6 +45,13 @@ def load_processor():
         proc = PaliGemmaProcessor(image_processor=image_processor, tokenizer=tokenizer)
         print("[processor] Using PaliGemmaProcessor", flush=True)
 
+    # Copy chat_template from tokenizer onto processor
+    # Without this, processor.apply_chat_template throws "No chat template is set"
+    # and processor.tokenizer.apply_chat_template doesn't insert image tokens
+    if not getattr(proc, "chat_template", None) and getattr(tokenizer, "chat_template", None):
+        proc.chat_template = tokenizer.chat_template
+        print("[processor] Copied chat_template from tokenizer to processor", flush=True)
+
     return proc
 
 
@@ -86,21 +92,29 @@ def handler(job):
                 {"type": "image"},
                 {"type": "text", "text": prompt},
             ]}]
-            # use tokenizer.apply_chat_template — processor built manually has no chat_template
-            text   = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            # processor.apply_chat_template now works — chat_template was copied from tokenizer
+            text   = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             inputs = processor(text=text, images=[image], return_tensors="pt").to(model.device)
+            print(f"[handler] image mode — input_ids shape: {inputs['input_ids'].shape}", flush=True)
         else:
             messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
             text   = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             inputs = processor.tokenizer(text, return_tensors="pt").to(model.device)
+            print(f"[handler] text mode — input_ids shape: {inputs['input_ids'].shape}", flush=True)
 
         input_len = inputs["input_ids"].shape[-1]
         with torch.inference_mode():
-            output_ids = model.generate(**inputs, max_new_tokens=512, do_sample=False)
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=256,
+                do_sample=True,
+                temperature=0.7,
+                top_p=0.9,
+            )
 
         new_ids = output_ids[0][input_len:]
         result  = processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
-        print(f"[handler] mode={mode} in={input_len} out={len(new_ids)}", flush=True)
+        print(f"[handler] mode={mode} in={input_len} out={len(new_ids)} result_len={len(result)}", flush=True)
         return {"report": result, "mode": mode}
 
     except Exception as e:
