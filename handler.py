@@ -94,7 +94,7 @@ def handler(job):
             ]}]
             # processor.apply_chat_template now works — chat_template was copied from tokenizer
             text   = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-            inputs = processor(text=text, images=[image], return_tensors="pt").to(model.device)
+            inputs = processor(text=text, images=[image], return_tensors="pt", padding=True).to(model.device)
             print(f"[handler] image mode — input_ids shape: {inputs['input_ids'].shape}", flush=True)
         else:
             messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
