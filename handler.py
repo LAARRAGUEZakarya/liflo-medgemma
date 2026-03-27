@@ -16,40 +16,9 @@ _model     = None
 _processor = None
 
 
-def patch_configs(model_dir):
-    """Patch local config files so transformers recognises the processor."""
-    # preprocessor_config.json — add image_processor_type if missing
-    prep_path = os.path.join(model_dir, "preprocessor_config.json")
-    if os.path.exists(prep_path):
-        with open(prep_path) as f:
-            prep = json.load(f)
-        print(f"[patch] preprocessor_config keys: {list(prep.keys())}", flush=True)
-        if "image_processor_type" not in prep:
-            prep["image_processor_type"] = "Gemma3ImageProcessor"
-            with open(prep_path, "w") as f:
-                json.dump(prep, f, indent=2)
-            print("[patch] added image_processor_type = Gemma3ImageProcessor", flush=True)
-    else:
-        print("[patch] WARNING: preprocessor_config.json not found", flush=True)
-
-    # config.json — log model_type for debugging
-    cfg_path = os.path.join(model_dir, "config.json")
-    if os.path.exists(cfg_path):
-        with open(cfg_path) as f:
-            cfg = json.load(f)
-        print(f"[patch] config.json model_type: {cfg.get('model_type')}", flush=True)
-
-
-def get_model():
-    global _model, _processor
-    if _model is not None:
-        return _model, _processor
-
-    from transformers import AutoProcessor, Gemma3ForConditionalGeneration
+def download_model():
     from huggingface_hub import snapshot_download, login
-
     token = os.environ.get("HF_TOKEN")
-
     if not os.path.exists(os.path.join(MODEL_LOCAL, "config.json")):
         print("Downloading MedGemma...", flush=True)
         if token:
@@ -57,19 +26,52 @@ def get_model():
         snapshot_download(repo_id=MODEL_ID, local_dir=MODEL_LOCAL)
         print("Download complete.", flush=True)
 
-    patch_configs(MODEL_LOCAL)
 
-    print("Loading processor...", flush=True)
-    _processor = AutoProcessor.from_pretrained(MODEL_LOCAL)
+def load_processor():
+    """
+    Load processor without AutoProcessor (bypasses model_type detection).
+    MedGemma = SigLIP vision encoder + Gemma3 tokenizer.
+    """
+    from transformers import SiglipImageProcessor, AutoTokenizer
 
-    print("Loading model...", flush=True)
+    print("[processor] Loading SiglipImageProcessor...", flush=True)
+    image_processor = SiglipImageProcessor.from_pretrained(MODEL_LOCAL)
+
+    print("[processor] Loading AutoTokenizer...", flush=True)
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL)
+
+    # Try Gemma3Processor first, fall back to PaliGemmaProcessor
+    try:
+        from transformers import Gemma3Processor
+        proc = Gemma3Processor(image_processor=image_processor, tokenizer=tokenizer)
+        print("[processor] Using Gemma3Processor", flush=True)
+    except Exception as e:
+        print(f"[processor] Gemma3Processor failed ({e}), trying PaliGemmaProcessor...", flush=True)
+        from transformers import PaliGemmaProcessor
+        proc = PaliGemmaProcessor(image_processor=image_processor, tokenizer=tokenizer)
+        print("[processor] Using PaliGemmaProcessor", flush=True)
+
+    return proc
+
+
+def get_model():
+    global _model, _processor
+    if _model is not None:
+        return _model, _processor
+
+    download_model()
+
+    _processor = load_processor()
+
+    print("[model] Loading Gemma3ForConditionalGeneration...", flush=True)
+    from transformers import Gemma3ForConditionalGeneration
     _model = Gemma3ForConditionalGeneration.from_pretrained(
         MODEL_LOCAL,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
     _model.eval()
-    print(f"MedGemma ready on: {next(_model.parameters()).device}", flush=True)
+    print(f"[model] Ready on: {next(_model.parameters()).device}", flush=True)
     return _model, _processor
 
 
@@ -103,12 +105,11 @@ def handler(job):
 
         new_ids = output_ids[0][input_len:]
         result  = processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
-
         print(f"[handler] mode={mode} in={input_len} out={len(new_ids)}", flush=True)
         return {"report": result, "mode": mode}
 
     except Exception as e:
-        print(f"[handler] ERROR: {traceback.format_exc()}", flush=True)
+        print(f"[handler] ERROR:\n{traceback.format_exc()}", flush=True)
         return {"error": str(e)}
 
 
