@@ -28,10 +28,6 @@ def download_model():
 
 
 def load_processor():
-    """
-    Load processor without AutoProcessor (bypasses model_type detection).
-    MedGemma = SigLIP vision encoder + Gemma3 tokenizer.
-    """
     from transformers import SiglipImageProcessor, AutoTokenizer
 
     print("[processor] Loading SiglipImageProcessor...", flush=True)
@@ -40,7 +36,6 @@ def load_processor():
     print("[processor] Loading AutoTokenizer...", flush=True)
     tokenizer = AutoTokenizer.from_pretrained(MODEL_LOCAL)
 
-    # Try Gemma3Processor first, fall back to PaliGemmaProcessor
     try:
         from transformers import Gemma3Processor
         proc = Gemma3Processor(image_processor=image_processor, tokenizer=tokenizer)
@@ -60,7 +55,6 @@ def get_model():
         return _model, _processor
 
     download_model()
-
     _processor = load_processor()
 
     print("[model] Loading Gemma3ForConditionalGeneration...", flush=True)
@@ -92,11 +86,12 @@ def handler(job):
                 {"type": "image"},
                 {"type": "text", "text": prompt},
             ]}]
-            text   = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            # use tokenizer.apply_chat_template — processor built manually has no chat_template
+            text   = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             inputs = processor(text=text, images=[image], return_tensors="pt").to(model.device)
         else:
             messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-            text   = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            text   = processor.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
             inputs = processor.tokenizer(text, return_tensors="pt").to(model.device)
 
         input_len = inputs["input_ids"].shape[-1]
