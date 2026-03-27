@@ -13,7 +13,6 @@ def get_model():
 
     import torch
     from transformers import AutoProcessor, Gemma3ForConditionalGeneration
-    from PIL import Image
 
     MODEL_ID = "google/medgemma-4b-it"
     print("Loading MedGemma...")
@@ -22,6 +21,7 @@ def get_model():
         MODEL_ID,
         token=os.environ.get("HF_TOKEN"),
         cache_dir=CACHE_DIR,
+        trust_remote_code=True,
     )
     _model = Gemma3ForConditionalGeneration.from_pretrained(
         MODEL_ID,
@@ -29,6 +29,7 @@ def get_model():
         device_map="auto",
         token=os.environ.get("HF_TOKEN"),
         cache_dir=CACHE_DIR,
+        trust_remote_code=True,
     )
     _model.eval()
     print("MedGemma ready.")
