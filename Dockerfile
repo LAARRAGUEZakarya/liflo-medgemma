@@ -8,7 +8,7 @@ RUN apt-get update && apt-get install -y \
     rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip && \
-    pip install "transformers>=4.51.0" accelerate Pillow runpod \
+    pip install transformers accelerate Pillow runpod \
                 sentencepiece protobuf huggingface_hub && \
     pip install torch==2.1.0+cu118 \
         --index-url https://download.pytorch.org/whl/cu118 \
