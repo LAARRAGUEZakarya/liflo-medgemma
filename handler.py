@@ -12,21 +12,32 @@ def get_model():
         return _model, _processor
 
     import torch
-    from transformers import Gemma3Processor, Gemma3ForConditionalGeneration
+    from transformers import (
+        AutoTokenizer,
+        Gemma3ImageProcessor,
+        Gemma3Processor,
+        Gemma3ForConditionalGeneration,
+    )
 
     MODEL_ID = "google/medgemma-4b-it"
+    token    = os.environ.get("HF_TOKEN")
     print("Loading MedGemma...")
 
-    _processor = Gemma3Processor.from_pretrained(
-        MODEL_ID,
-        token=os.environ.get("HF_TOKEN"),
-        cache_dir=CACHE_DIR,
+    image_processor = Gemma3ImageProcessor.from_pretrained(
+        MODEL_ID, token=token, cache_dir=CACHE_DIR,
     )
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_ID, token=token, cache_dir=CACHE_DIR,
+    )
+    _processor = Gemma3Processor(
+        image_processor=image_processor, tokenizer=tokenizer
+    )
+
     _model = Gemma3ForConditionalGeneration.from_pretrained(
         MODEL_ID,
         torch_dtype=torch.bfloat16,
         device_map="auto",
-        token=os.environ.get("HF_TOKEN"),
+        token=token,
         cache_dir=CACHE_DIR,
     )
     _model.eval()
