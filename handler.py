@@ -5,9 +5,12 @@ torch.backends.cudnn.enabled = False
 
 CACHE_DIR = "/runpod-volume/models"
 MODEL_LOCAL = os.path.join(CACHE_DIR, "medgemma-4b-it")
-MODEL_ID = "google/medgemma-4b-it"
+MODEL_ID    = "google/medgemma-4b-it"
 
-_model = None
+# MedGemma-4b native resolution
+IMAGE_SIZE = 896
+
+_model     = None
 _processor = None
 
 
@@ -27,11 +30,16 @@ def get_model():
 
     download_model()
 
-    # AutoProcessor correctly loads Gemma3Processor — avoids passing unsupported
-    # do_pan_and_scan / pan_and_scan_* args to SiglipImageProcessor directly.
     from transformers import AutoProcessor, Gemma3ForConditionalGeneration
 
     _processor = AutoProcessor.from_pretrained(MODEL_LOCAL)
+
+    # Disable pan-and-scan AT THE PROCESSOR LEVEL so it can never produce
+    # variable-size crops that fail tensor stacking.
+    # (Passing do_pan_and_scan=False as a kwarg to __call__ is not reliably
+    # forwarded in all transformers 4.x versions.)
+    if hasattr(_processor, "image_processor"):
+        _processor.image_processor.do_pan_and_scan = False
 
     _model = Gemma3ForConditionalGeneration.from_pretrained(
         MODEL_LOCAL, torch_dtype=torch.bfloat16, device_map="auto"
@@ -54,25 +62,25 @@ def handler(job):
             # ── IMAGE mode ───────────────────────────────────────────────────
             image = Image.open(BytesIO(base64.b64decode(img_b64))).convert("RGB")
 
+            # Pre-resize to model's native resolution so the image processor
+            # receives a uniform-size input — eliminates any remaining risk of
+            # pan-and-scan producing crops of different pixel dimensions.
+            image = image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS)
+
             messages = [{"role": "user", "content": [
                 {"type": "image"},
-                {"type": "text", "text": prompt}
+                {"type": "text", "text": prompt},
             ]}]
 
             text = processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
 
-            # do_pan_and_scan=False: disables Gemma3 multi-crop (pan-and-scan)
-            #   which produces variable-size arrays that cannot be stacked into
-            #   a single tensor → fixes "Unable to create tensor / padding=True"
-            # padding=True: ensures tokenizer sequences are padded uniformly
             inputs = processor(
                 text=[text],
                 images=[image],
                 return_tensors="pt",
                 padding=True,
-                do_pan_and_scan=False
             ).to(model.device)
 
             input_len = inputs["input_ids"].shape[-1]
@@ -82,11 +90,11 @@ def handler(job):
                 output_ids = model.generate(
                     **inputs,
                     max_new_tokens=safe_new,
-                    do_sample=False   # greedy — more stable for medical output
+                    do_sample=False,
                 )
 
             new_ids = output_ids[0][input_len:]
-            result = processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+            result  = processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
 
         else:
             # ── TEXT mode ────────────────────────────────────────────────────
@@ -96,7 +104,6 @@ def handler(job):
                 messages, tokenize=False, add_generation_prompt=True
             )
 
-            # Use tokenizer directly for text-only (no image tensor needed)
             inputs = processor.tokenizer(
                 text, return_tensors="pt", padding=True
             ).to(model.device)
@@ -110,11 +117,11 @@ def handler(job):
                     max_new_tokens=safe_new,
                     do_sample=True,
                     temperature=0.7,
-                    top_p=0.9
+                    top_p=0.9,
                 )
 
             new_ids = output_ids[0][input_len:]
-            result = processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+            result  = processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
 
         return {"report": result, "mode": mode}
 
