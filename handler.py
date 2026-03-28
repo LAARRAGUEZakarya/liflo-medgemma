@@ -1,14 +1,17 @@
 import runpod, os, base64, traceback
 from io import BytesIO
 import torch
+import torchvision.transforms.functional as TF
 torch.backends.cudnn.enabled = False
 
-CACHE_DIR = "/runpod-volume/models"
+CACHE_DIR  = "/runpod-volume/models"
 MODEL_LOCAL = os.path.join(CACHE_DIR, "medgemma-4b-it")
 MODEL_ID    = "google/medgemma-4b-it"
 
-# MedGemma-4b native resolution
-IMAGE_SIZE = 896
+# MedGemma / SigLIP native resolution and normalisation
+IMAGE_SIZE  = 896
+IMG_MEAN    = [0.5, 0.5, 0.5]
+IMG_STD     = [0.5, 0.5, 0.5]
 
 _model     = None
 _processor = None
@@ -34,18 +37,24 @@ def get_model():
 
     _processor = AutoProcessor.from_pretrained(MODEL_LOCAL)
 
-    # Disable pan-and-scan AT THE PROCESSOR LEVEL so it can never produce
-    # variable-size crops that fail tensor stacking.
-    # (Passing do_pan_and_scan=False as a kwarg to __call__ is not reliably
-    # forwarded in all transformers 4.x versions.)
-    if hasattr(_processor, "image_processor"):
-        _processor.image_processor.do_pan_and_scan = False
-
     _model = Gemma3ForConditionalGeneration.from_pretrained(
         MODEL_LOCAL, torch_dtype=torch.bfloat16, device_map="auto"
     )
     _model.eval()
     return _model, _processor
+
+
+def pil_to_pixel_values(pil_image: "PIL.Image.Image") -> torch.Tensor:
+    """
+    Convert a PIL image to a (1, 3, H, W) bfloat16 tensor using torchvision only.
+    Completely avoids the numpy dependency that crashes Gemma3ImageProcessor.
+    """
+    from PIL import Image
+    pil_image = pil_image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS)
+    # TF.to_tensor: PIL RGB → float32 [0,1] tensor (C,H,W), pure torch — no numpy
+    t = TF.to_tensor(pil_image)
+    t = TF.normalize(t, mean=IMG_MEAN, std=IMG_STD)       # → [-1, 1]
+    return t.unsqueeze(0).to(dtype=torch.bfloat16)        # → (1, 3, 896, 896)
 
 
 def handler(job):
@@ -62,28 +71,26 @@ def handler(job):
             # ── IMAGE mode ───────────────────────────────────────────────────
             image = Image.open(BytesIO(base64.b64decode(img_b64))).convert("RGB")
 
-            # Pre-resize to model's native resolution so the image processor
-            # receives a uniform-size input — eliminates any remaining risk of
-            # pan-and-scan producing crops of different pixel dimensions.
-            image = image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS)
-
+            # Build chat template — inserts <image> placeholder token
             messages = [{"role": "user", "content": [
                 {"type": "image"},
                 {"type": "text", "text": prompt},
             ]}]
-
             text = processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
 
-            inputs = processor(
-                text=[text],
-                images=[image],
-                return_tensors="pt",
-                padding=True,
+            # Tokenise text — the <image> special token is kept as-is;
+            # the model expands it to image patch embeddings at forward time
+            text_inputs = processor.tokenizer(
+                text, return_tensors="pt", padding=True
             ).to(model.device)
 
-            input_len = inputs["input_ids"].shape[-1]
+            # Build pixel_values with torchvision (zero numpy dependency)
+            pixel_values = pil_to_pixel_values(image).to(model.device)
+
+            inputs    = {**text_inputs, "pixel_values": pixel_values}
+            input_len = text_inputs["input_ids"].shape[-1]
             safe_new  = max(64, 1000 - input_len)
 
             with torch.inference_mode():
@@ -99,15 +106,13 @@ def handler(job):
         else:
             # ── TEXT mode ────────────────────────────────────────────────────
             messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
-
             text = processor.tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
 
-            inputs = processor.tokenizer(
+            inputs    = processor.tokenizer(
                 text, return_tensors="pt", padding=True
             ).to(model.device)
-
             input_len = inputs["input_ids"].shape[-1]
             safe_new  = max(64, 1000 - input_len)
 
