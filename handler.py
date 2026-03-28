@@ -1,29 +1,31 @@
-import runpod, os, base64, traceback
+import runpod, os, base64, traceback, sys
 from io import BytesIO
 import torch
-import torchvision.transforms.functional as TF
 torch.backends.cudnn.enabled = False
 
-CACHE_DIR  = "/runpod-volume/models"
+CACHE_DIR   = "/runpod-volume/models"
 MODEL_LOCAL = os.path.join(CACHE_DIR, "medgemma-4b-it")
 MODEL_ID    = "google/medgemma-4b-it"
-
-# MedGemma / SigLIP native resolution and normalisation
-IMAGE_SIZE  = 896
-IMG_MEAN    = [0.5, 0.5, 0.5]
-IMG_STD     = [0.5, 0.5, 0.5]
+IMAGE_SIZE  = 896          # MedGemma / SigLIP native resolution
 
 _model     = None
 _processor = None
+
+
+def log(msg):
+    print(f"[HANDLER] {msg}", file=sys.stderr, flush=True)
 
 
 def download_model():
     from huggingface_hub import snapshot_download, login
     token = os.environ.get("HF_TOKEN")
     if not os.path.exists(os.path.join(MODEL_LOCAL, "config.json")):
+        log("Downloading model from HuggingFace …")
         if token:
             login(token=token)
         snapshot_download(repo_id=MODEL_ID, local_dir=MODEL_LOCAL)
+    else:
+        log("Model already on disk, skipping download.")
 
 
 def get_model():
@@ -33,28 +35,37 @@ def get_model():
 
     download_model()
 
+    log("Loading AutoProcessor …")
     from transformers import AutoProcessor, Gemma3ForConditionalGeneration
-
     _processor = AutoProcessor.from_pretrained(MODEL_LOCAL)
+    log("Processor loaded.")
 
+    log("Loading Gemma3ForConditionalGeneration …")
     _model = Gemma3ForConditionalGeneration.from_pretrained(
         MODEL_LOCAL, torch_dtype=torch.bfloat16, device_map="auto"
     )
     _model.eval()
+    log("Model loaded and ready.")
     return _model, _processor
 
 
-def pil_to_pixel_values(pil_image: "PIL.Image.Image") -> torch.Tensor:
+def pil_to_pixel_values(pil_image):
     """
-    Convert a PIL image to a (1, 3, H, W) bfloat16 tensor using torchvision only.
-    Completely avoids the numpy dependency that crashes Gemma3ImageProcessor.
+    PIL RGB image → (1, 3, H, W) bfloat16 tensor.
+
+    Uses ONLY PIL + pure PyTorch (torch.frombuffer).
+    No numpy, no torchvision — avoids 'Numpy is not available' entirely.
     """
     from PIL import Image
-    pil_image = pil_image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS)
-    # TF.to_tensor: PIL RGB → float32 [0,1] tensor (C,H,W), pure torch — no numpy
-    t = TF.to_tensor(pil_image)
-    t = TF.normalize(t, mean=IMG_MEAN, std=IMG_STD)       # → [-1, 1]
-    return t.unsqueeze(0).to(dtype=torch.bfloat16)        # → (1, 3, 896, 896)
+    pil_image = pil_image.resize((IMAGE_SIZE, IMAGE_SIZE), Image.Resampling.LANCZOS).convert("RGB")
+
+    raw  = bytearray(pil_image.tobytes())                    # H*W*3 raw uint8 bytes
+    flat = torch.frombuffer(raw, dtype=torch.uint8).clone()  # (H*W*3,) — clone to own memory
+    t    = flat.reshape(IMAGE_SIZE, IMAGE_SIZE, 3)           # (H, W, 3)
+    t    = t.float().div_(255.0)                             # [0, 1]
+    t    = t.permute(2, 0, 1)                                # (3, H, W)
+    t    = t.sub_(0.5).div_(0.5)                             # [-1, 1]  (SigLIP norm)
+    return t.unsqueeze(0).to(dtype=torch.bfloat16)           # (1, 3, H, W)
 
 
 def handler(job):
@@ -67,32 +78,36 @@ def handler(job):
         mode    = str(job_input.get("mode", "chat"))
         img_b64 = job_input.get("image_base64", "")
 
+        log(f"Job mode: {'image' if img_b64 else 'text'}")
+
         if img_b64:
             # ── IMAGE mode ───────────────────────────────────────────────────
             image = Image.open(BytesIO(base64.b64decode(img_b64))).convert("RGB")
+            log(f"Image decoded: {image.size}")
 
-            # Build chat template — inserts <image> placeholder token
             messages = [{"role": "user", "content": [
                 {"type": "image"},
                 {"type": "text", "text": prompt},
             ]}]
+
+            log("Applying chat template …")
             text = processor.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
 
-            # Tokenise text — the <image> special token is kept as-is;
-            # the model expands it to image patch embeddings at forward time
+            log("Tokenising …")
             text_inputs = processor.tokenizer(
                 text, return_tensors="pt", padding=True
             ).to(model.device)
 
-            # Build pixel_values with torchvision (zero numpy dependency)
+            log("Building pixel_values …")
             pixel_values = pil_to_pixel_values(image).to(model.device)
 
             inputs    = {**text_inputs, "pixel_values": pixel_values}
             input_len = text_inputs["input_ids"].shape[-1]
             safe_new  = max(64, 1000 - input_len)
 
+            log(f"Generating (max_new_tokens={safe_new}) …")
             with torch.inference_mode():
                 output_ids = model.generate(
                     **inputs,
@@ -102,20 +117,25 @@ def handler(job):
 
             new_ids = output_ids[0][input_len:]
             result  = processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+            log(f"Done. Output length: {len(result)} chars")
 
         else:
             # ── TEXT mode ────────────────────────────────────────────────────
             messages = [{"role": "user", "content": [{"type": "text", "text": prompt}]}]
+
+            log("Applying chat template (text only) …")
             text = processor.tokenizer.apply_chat_template(
                 messages, tokenize=False, add_generation_prompt=True
             )
 
+            log("Tokenising …")
             inputs    = processor.tokenizer(
                 text, return_tensors="pt", padding=True
             ).to(model.device)
             input_len = inputs["input_ids"].shape[-1]
             safe_new  = max(64, 1000 - input_len)
 
+            log(f"Generating (max_new_tokens={safe_new}) …")
             with torch.inference_mode():
                 output_ids = model.generate(
                     **inputs,
@@ -127,10 +147,12 @@ def handler(job):
 
             new_ids = output_ids[0][input_len:]
             result  = processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
+            log(f"Done. Output length: {len(result)} chars")
 
         return {"report": result, "mode": mode}
 
     except Exception as e:
+        log(f"ERROR: {e}")
         return {"error": str(e), "trace": traceback.format_exc()}
 
 
