@@ -63,13 +63,16 @@ def handler(job):
                 messages, tokenize=False, add_generation_prompt=True
             )
 
-            # padding=True fixes "Unable to create tensor" when image tokens
-            # and text tokens form sequences of different lengths in the batch
+            # do_pan_and_scan=False: disables Gemma3 multi-crop (pan-and-scan)
+            #   which produces variable-size arrays that cannot be stacked into
+            #   a single tensor → fixes "Unable to create tensor / padding=True"
+            # padding=True: ensures tokenizer sequences are padded uniformly
             inputs = processor(
                 text=[text],
                 images=[image],
                 return_tensors="pt",
-                padding=True
+                padding=True,
+                do_pan_and_scan=False
             ).to(model.device)
 
             input_len = inputs["input_ids"].shape[-1]
