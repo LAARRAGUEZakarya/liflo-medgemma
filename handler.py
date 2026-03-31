@@ -97,10 +97,12 @@ def handler(job):
 
             log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
             with torch.inference_mode():
-                output_ids = model.generate(
+             output_ids = model.generate(
                     **inputs,
-                    max_new_tokens=safe_new,
+                    max_new_tokens=min(safe_new, 512),
                     do_sample=False,
+                    temperature=0.0,
+                    eos_token_id=processor.tokenizer.eos_token_id,
                 )
 
             new_ids = output_ids[0][input_len:]
@@ -126,10 +128,13 @@ def handler(job):
             log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
             with torch.inference_mode():
                 output_ids = model.generate(
-                    **inputs,
-                    max_new_tokens=safe_new,
-                    do_sample=False,
-                )
+                    output_ids = model.generate(
+                        **inputs,
+                        max_new_tokens=min(safe_new, 512),
+                        do_sample=False,
+                        temperature=0.0,
+                        eos_token_id=processor.tokenizer.eos_token_id,
+                    )
 
             new_ids = output_ids[0][input_len:]
             result  = processor.tokenizer.decode(new_ids, skip_special_tokens=True).strip()
