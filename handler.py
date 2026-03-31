@@ -128,7 +128,6 @@ def handler(job):
             log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
             with torch.inference_mode():
                 output_ids = model.generate(
-                    output_ids = model.generate(
                         **inputs,
                         max_new_tokens=min(safe_new, 512),
                         do_sample=False,
