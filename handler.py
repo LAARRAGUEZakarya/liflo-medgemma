@@ -129,8 +129,6 @@ def handler(job):
                     **inputs,
                     max_new_tokens=safe_new,
                     do_sample=False,
-                    temperature=0.7,
-                    top_p=0.9,
                 )
 
             new_ids = output_ids[0][input_len:]
