@@ -8,12 +8,6 @@ MODEL_LOCAL = os.path.join(CACHE_DIR, "medgemma-4b-it")
 MODEL_ID    = "google/medgemma-4b-it"
 IMAGE_SIZE  = 896
 
-# MedGemma 4B-IT (Gemma3) supports up to 8 192 tokens.
-# We reserve MAX_NEW_TOKENS for output and cap input to the remainder.
-MAX_SEQ_LEN   = 8192
-MAX_NEW_TOKENS = 1024
-MAX_INPUT_TOKENS = MAX_SEQ_LEN - MAX_NEW_TOKENS  # 7 168
-
 _model     = None
 _processor = None
 
@@ -42,7 +36,7 @@ def get_model():
     download_model()
 
     log("Loading AutoProcessor …")
-    from transformers import AutoProcessor, AutoConfig, Gemma3ForConditionalGeneration
+    from transformers import AutoProcessor, Gemma3ForConditionalGeneration
 
     _processor = AutoProcessor.from_pretrained(MODEL_LOCAL)
 
@@ -52,24 +46,14 @@ def get_model():
         _processor.image_processor.do_pan_and_scan = False
         log("pan-and-scan disabled on image_processor.")
 
-    log("Loading model config …")
-    config = AutoConfig.from_pretrained(MODEL_LOCAL)
-
-    # Expand positional embeddings to full sequence length if the saved config
-    # has a smaller value (e.g. 1024) — prevents tensor-size mismatch errors.
-    if getattr(config, "max_position_embeddings", MAX_SEQ_LEN) < MAX_SEQ_LEN:
-        log(f"Expanding max_position_embeddings: {config.max_position_embeddings} → {MAX_SEQ_LEN}")
-        config.max_position_embeddings = MAX_SEQ_LEN
-
     log("Loading model …")
     _model = Gemma3ForConditionalGeneration.from_pretrained(
         MODEL_LOCAL,
-        config=config,
         torch_dtype=torch.bfloat16,
         device_map="auto",
     )
     _model.eval()
-    log(f"Model ready. max_position_embeddings={config.max_position_embeddings}")
+    log("Model ready.")
     return _model, _processor
 
 
@@ -109,18 +93,16 @@ def handler(job):
                 images=[image],
                 return_tensors="pt",
                 padding=True,
-                truncation=True,
-                max_length=MAX_INPUT_TOKENS,
             ).to(model.device)
 
             input_len = inputs["input_ids"].shape[-1]
-            safe_new  = min(MAX_NEW_TOKENS, MAX_SEQ_LEN - input_len)
+            safe_new  = max(1024, 8192 - input_len)
 
             log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
             with torch.inference_mode():
                 output_ids = model.generate(
                     **inputs,
-                    max_new_tokens=max(64, safe_new),
+                    max_new_tokens=safe_new,
                     do_sample=False,
                     temperature=0.0,
                     eos_token_id=processor.tokenizer.eos_token_id,
@@ -144,17 +126,15 @@ def handler(job):
                 text,
                 return_tensors="pt",
                 padding=True,
-                truncation=True,
-                max_length=MAX_INPUT_TOKENS,
             ).to(model.device)
             input_len = inputs["input_ids"].shape[-1]
-            safe_new  = min(MAX_NEW_TOKENS, MAX_SEQ_LEN - input_len)
+            safe_new  = max(64, 1000 - input_len)
 
             log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
             with torch.inference_mode():
                 output_ids = model.generate(
                     **inputs,
-                    max_new_tokens=max(64, safe_new),
+                    max_new_tokens=safe_new,
                     do_sample=False,
                     temperature=0.0,
                     eos_token_id=processor.tokenizer.eos_token_id,
