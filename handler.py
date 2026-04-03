@@ -128,7 +128,7 @@ def handler(job):
                 padding=True,
             ).to(model.device)
             input_len = inputs["input_ids"].shape[-1]
-            safe_new  = max(64, 1000 - input_len)
+            safe_new  = max(1024, 8192 - input_len)
 
             log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
             with torch.inference_mode():
