@@ -93,6 +93,8 @@ def handler(job):
                 images=[image],
                 return_tensors="pt",
                 padding=True,
+                truncation=True,   
+                max_length=1000, 
             ).to(model.device)
 
             input_len = inputs["input_ids"].shape[-1]
@@ -126,6 +128,8 @@ def handler(job):
                 text,
                 return_tensors="pt",
                 padding=True,
+                truncation=True,  
+                max_length=1000, 
             ).to(model.device)
             input_len = inputs["input_ids"].shape[-1]
             safe_new  = max(1024, 8192 - input_len)
