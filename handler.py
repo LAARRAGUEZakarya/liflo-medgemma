@@ -94,11 +94,11 @@ def handler(job):
                 return_tensors="pt",
                 padding=True,
                 truncation=True,   
-                max_length=1000, 
+                max_length=900,
             ).to(model.device)
 
             input_len = inputs["input_ids"].shape[-1]
-            safe_new  = max(1024, 8192 - input_len)
+            safe_new  = max(32, 1024 - input_len)
 
             log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
             with torch.inference_mode():
@@ -129,10 +129,10 @@ def handler(job):
                 return_tensors="pt",
                 padding=True,
                 truncation=True,  
-                max_length=1000, 
+                max_length=900,
             ).to(model.device)
             input_len = inputs["input_ids"].shape[-1]
-            safe_new  = max(1024, 8192 - input_len)
+            safe_new  = max(32, 1024 - input_len)
 
             log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
             with torch.inference_mode():
