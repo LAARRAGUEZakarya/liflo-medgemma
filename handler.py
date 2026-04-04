@@ -124,11 +124,12 @@ def handler(job):
             )
 
             log("Tokenising …")
+            processor.tokenizer.truncation_side = 'left'
             inputs    = processor.tokenizer(
                 text,
                 return_tensors="pt",
                 padding=True,
-                truncation=True,  
+                truncation=True,
                 max_length=900,
             ).to(model.device)
             input_len = inputs["input_ids"].shape[-1]
