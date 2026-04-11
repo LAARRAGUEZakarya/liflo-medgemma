@@ -67,6 +67,13 @@ def handler(job):
         mode    = str(job_input.get("mode", "chat"))
         img_b64 = job_input.get("image_base64", "")
 
+        # Client-tunable generation params (safe defaults)
+        max_new    = int(job_input.get("max_new_tokens", 512))
+        temp       = float(job_input.get("temperature", 0.6))
+        top_p      = float(job_input.get("top_p", 0.92))
+        rep_pen    = float(job_input.get("repetition_penalty", 1.5))
+        stop_strs  = job_input.get("stop", [])
+
         log(f"Job mode: {'image' if img_b64 else 'text'}")
 
         if img_b64:
@@ -93,20 +100,22 @@ def handler(job):
                 images=[image],
                 return_tensors="pt",
                 padding=True,
-                truncation=True,   
-                max_length=900,
+                truncation=True,
+                max_length=1800,
             ).to(model.device)
 
             input_len = inputs["input_ids"].shape[-1]
-            safe_new  = max(32, 1024 - input_len)
+            safe_new  = max(32, 2048 - input_len)
 
-            log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
+            log(f"Generating (input_len={input_len}, max_new={min(max_new, safe_new)}) …")
             with torch.inference_mode():
                 output_ids = model.generate(
                     **inputs,
-                    max_new_tokens=safe_new,
-                    do_sample=False,
-                    temperature=0.0,
+                    max_new_tokens=min(max_new, safe_new),
+                    do_sample=temp > 0,
+                    temperature=temp if temp > 0 else None,
+                    top_p=top_p if temp > 0 else None,
+                    repetition_penalty=rep_pen,
                     eos_token_id=processor.tokenizer.eos_token_id,
                 )
 
@@ -130,18 +139,20 @@ def handler(job):
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
-                max_length=900,
+                max_length=1800,
             ).to(model.device)
             input_len = inputs["input_ids"].shape[-1]
-            safe_new  = max(32, 1024 - input_len)
+            safe_new  = max(32, 2048 - input_len)
 
-            log(f"Generating (input_len={input_len}, max_new={safe_new}) …")
+            log(f"Generating (input_len={input_len}, max_new={min(max_new, safe_new)}) …")
             with torch.inference_mode():
                 output_ids = model.generate(
                     **inputs,
-                    max_new_tokens=safe_new,
-                    do_sample=False,
-                    temperature=0.0,
+                    max_new_tokens=min(max_new, safe_new),
+                    do_sample=temp > 0,
+                    temperature=temp if temp > 0 else None,
+                    top_p=top_p if temp > 0 else None,
+                    repetition_penalty=rep_pen,
                     eos_token_id=processor.tokenizer.eos_token_id,
                 )
 
